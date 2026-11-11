@@ -23,8 +23,11 @@ class Gateway:
         print(" [GATEWAY] Connected to RabbitMQ")
 
     def send_message(self, routing_key: str, body: str):
-        if not self.channel or self.channel.is_closed:
+        if not self.channel:
             raise RuntimeError("RabbitMQ connection is not established.")
+
+        if self.channel.is_closed:
+            raise RuntimeError("RabbitMQ channel is closed.")
         
         self.channel.basic_publish(
             exchange='',
