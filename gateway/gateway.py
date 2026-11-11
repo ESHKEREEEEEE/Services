@@ -15,7 +15,7 @@ class Gateway:
     def connect(self):
         credentials = PlainCredentials(self.username, self.password, erase_on_connect=True)
         self.connection = pika.BlockingConnection(
-            pika.ConnectionParameters(host='localhost', port=self.rabbit_port, credentials=credentials)
+            pika.ConnectionParameters(host='rabbitmq', port=self.rabbit_port, credentials=credentials)
         )
         self.channel = self.connection.channel()
         self.channel.queue_declare(queue='vacancies_queue', durable=True, arguments={'x-queue-type': 'quorum'})

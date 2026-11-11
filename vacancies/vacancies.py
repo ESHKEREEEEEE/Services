@@ -4,7 +4,7 @@ from pika.credentials import PlainCredentials
 def main():
 
     credentials = PlainCredentials(username = 'vacancies', password = 'vacancies', erase_on_connect=True)
-    connection = pika.BlockingConnection(pika.ConnectionParameters(host = 'localhost', port = 5672, credentials=credentials))
+    connection = pika.BlockingConnection(pika.ConnectionParameters(host = 'rabbitmq', port = 5672, credentials=credentials))
     channel = connection.channel()
 
     channel.queue_declare(queue='vacancies_queue', durable=True, arguments={'x-queue-type': 'quorum'})
