@@ -6,6 +6,10 @@ import json
 import sys
 import os
 
+from database import init_db, post_vacancy, put_vacancy, get_vacancies
+
+DB_FILE = "vacancies.db"
+
 
 #Обработка запросов
 async def process_vacancy_request(message: aio_pika.IncomingMessage, channel: AbstractRobustChannel) -> dict:
@@ -15,41 +19,96 @@ async def process_vacancy_request(message: aio_pika.IncomingMessage, channel: Ab
 
         #Обработка POST запроса
         if msg_type == "post":
-            #Болванка
-            response = {
-                "status": "created",
-                "vacancy": {
-                    "id": 1,
-                    "name": body.get("name", "Unknown"),
-                    "description": body.get("description", ""),
-                    "yoe": body.get("yoe", 0)
+
+            #Преобразование yoe
+            try:
+                yoe_value = int(body.get("yoe", 0))
+            except (ValueError, TypeError):
+                yoe_value = 0
+
+            #Обращение к базе данных
+            result_id = post_vacancy(DB_FILE, body.get("name", "unknown"), body.get("description", "unknown"), yoe_value)
+
+            #Проверка результата
+            if result_id > 0:
+                response = {
+                    "status": "created",
+                    "vacancy": {
+                        "id": result_id,
+                        "name": body.get("name", "Unknown"),
+                        "description": body.get("description", ""),
+                        "yoe": yoe_value
+                    }
                 }
-            }
+            else:
+                response = {
+                    "status": "error",
+                    "message": "Failed to insert vacancy"
+                }
 
         #Обработка GET запроса
         elif msg_type == "get":
-            #Болванка
-            yoe = body.get("yoe", 0)
+            #Преобразование yoe
+            try:
+                yoe_value = int(body.get("yoe", 0))
+            except (ValueError, TypeError):
+                yoe_value = 0
+
+            #Обращение к базе данных
+            result = get_vacancies(DB_FILE, yoe_value)
+
+            #Даже если ничего не нашлось - считаем это успешным результатом,
             response = {
                 "status": "success",
-                "vacancies": [
-                    {"id": 1, "name": "Software Engineer", "description": "Backend development", "yoe": 3},
-                    {"id": 2, "name": "Data Analyst", "description": "Data processing", "yoe": 2}
-                ]
+                "vacancies": result
             }
 
         #Обработка PUT запроса
         elif msg_type == "put":
-            #Болванка
-            response = {
-                "status": "updated",
-                "vacancy": {
-                    "id": body.get("vacancy_id"),
-                    "name": body.get("name", "Unknown"),
-                    "description": body.get("description", ""),
-                    "yoe": body.get("yoe", 0)
+            #Получение vacancu_id
+            id = body.get("vacancy_id")
+            if id is None:
+                response = {
+                    "status": "error",
+                    "message": "Failed to get id of vacancy"
                 }
-            }
+            else:
+                #Преобразование id
+                try:
+                    id = int(id)
+                except (ValueError, TypeError):
+                    response = {
+                        "status": "error",
+                        "message": "Invalid id format"
+                    }
+                    id = None
+
+                if id is not None:
+                    #Преобразование yoe
+                    try:
+                        yoe_value = int(body.get("yoe", 0))
+                    except (ValueError, TypeError):
+                        yoe_value = 0
+
+                    #Обращение к базе данных
+                    result_id = put_vacancy(DB_FILE, id, body.get("name", "unknown"), body.get("description", "unknown"), yoe_value)
+
+                    #Проверка результата
+                    if result_id > 0:
+                        response = {
+                            "status": "updated",
+                            "vacancy": {
+                                "id": result_id,
+                                "name": body.get("name", "Unknown"),
+                                "description": body.get("description", ""),
+                                "yoe": yoe_value
+                            }
+                        }
+                    else:
+                        response = {
+                            "status": "error",
+                            "message": "Failed to update vacancy"
+                        }
 
         #Обработка чё-попало
         else:
@@ -109,6 +168,9 @@ async def main():
             durable=True,
             arguments={'x-queue-type': 'quorum'}
         )
+
+        init_db(DB_FILE)
+
         
         #Получение сообщений
         await queue.consume(lambda m: on_message(m, channel))
