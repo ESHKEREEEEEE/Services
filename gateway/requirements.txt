@@ -1,4 +1,3 @@
-fastapi 
+fastapi
 uvicorn
 aio-pika
-pika
