@@ -1,1 +1,3 @@
 aio-pika
+llama-cpp-python
+huggingface-hub

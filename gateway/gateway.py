@@ -150,7 +150,7 @@ async def post_vac(vac: Vacancy):
 @app.get("/vacancies/")
 async def get_vac(yoe: int = 0):
     message = {
-        "type": "get",
+        "type": "get_yoe",
         "yoe": yoe
     }
     
@@ -164,6 +164,22 @@ async def get_vac(yoe: int = 0):
     except TimeoutError as e:
         return {"status": "sent", "error": str(e), "vacancies": []}
 
+@app.get("/vacancies/{id}")
+async def get_vac(id: int):
+    message = {
+        "type": "get_id",
+        "id": id
+    }
+    
+    try:
+        result = await gateway.send_rpc_request(
+            routing_key='vacancies_queue',
+            payload=message,
+            timeout=5.0
+        )
+        return result
+    except TimeoutError as e:
+        return {"status": "sent", "error": str(e), "vacancies": []}
 
 @app.put("/vacancies/{id}")
 async def put_vac(vac: Vacancy, id: int):
@@ -198,7 +214,7 @@ async def get_cover(user_id: int, vacancy_id: int):
         result = await gateway.send_rpc_request(
             routing_key='cover_generator_queue',
             payload=message,
-            timeout=5.0
+            timeout=6000.0
         )
         return result
     except TimeoutError as e:

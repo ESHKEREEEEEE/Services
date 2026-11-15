@@ -1,17 +1,36 @@
-#Образ с питоном
+# Образ с питоном
 FROM python:3.11-slim
 
-#Рабочая директория контейнера
+# Рабочая директория контейнера
 WORKDIR /app
 
-#Скопировать requirements.txt в контейнер
+# Установка системных зависимостей для llama-cpp-python
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    libgomp1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Копируем requirements.txt в контейнер
 COPY requirements.txt .
 
-#Установить все из requirements.txt
+# Устанавливаем все из requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-#Скопировать все остальное
+# Создаем директорию для моделей
+RUN mkdir -p /app/models
+
+# Копируем скрипт для скачивания модели
+COPY download_model.py /app/download_model.py
+
+# Скачиваем модель
+RUN python /app/download_model.py
+
+# Копируем остальные файлы
 COPY . .
 
-#Запустить
+# Запускаем
 CMD ["python", "-u", "cover_generator.py"]

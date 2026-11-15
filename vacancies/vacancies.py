@@ -6,7 +6,7 @@ import json
 import sys
 import os
 
-from database import init_db, post_vacancy, put_vacancy, get_vacancies
+from database import init_db, post_vacancy, put_vacancy, get_vacancies_by_yoe, get_vacancy_by_id
 
 DB_FILE = "vacancies.db"
 
@@ -47,7 +47,7 @@ async def process_vacancy_request(message: aio_pika.IncomingMessage, channel: Ab
                 }
 
         #Обработка GET запроса
-        elif msg_type == "get":
+        elif msg_type == "get_yoe":
             #Преобразование yoe
             try:
                 yoe_value = int(body.get("yoe", 0))
@@ -55,8 +55,24 @@ async def process_vacancy_request(message: aio_pika.IncomingMessage, channel: Ab
                 yoe_value = 0
 
             #Обращение к базе данных
-            result = get_vacancies(DB_FILE, yoe_value)
+            result = get_vacancies_by_yoe(DB_FILE, yoe_value)
 
+            #Даже если ничего не нашлось - считаем это успешным результатом,
+            response = {
+                "status": "success",
+                "vacancies": result
+            }
+
+        elif msg_type == "get_id":
+            #Преобразование id
+            try:
+                id_value = int(body.get("id", 0))
+            except (ValueError, TypeError):
+                id_value = 0
+        
+            #Обращение к базе данных
+            result = get_vacancy_by_id(DB_FILE, id_value)
+        
             #Даже если ничего не нашлось - считаем это успешным результатом,
             response = {
                 "status": "success",
