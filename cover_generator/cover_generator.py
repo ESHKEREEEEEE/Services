@@ -1,11 +1,13 @@
 import aio_pika
-from aio_pika import connect_robust, Message
+from aio_pika import connect_robust, Message, IncomingMessage
 from aio_pika.abc import AbstractRobustConnection, AbstractRobustChannel, AbstractRobustQueue
 import asyncio
 import json
 import sys
 import os
 import re
+import uuid
+from typing import Optional, Dict
 from llama_cpp import Llama
 
 from download_model import download_model
@@ -150,15 +152,160 @@ async def get_user_data(user_id: int):
 }"""
 
 
-#Функция для получения данных о вакансии по id
-#Заглушка
-async def get_vacancy_data(vacancy_id: int):
-    return """{
-  "name": "Senior Python developer",
-  "description": "Требуется разработчик программного обеспечения с опытом проектирования высоконагруженных систем.
-  Условия: Моментальная выплата, релокационный пакет, стабильная зарплата, социальные гарантии",
-  "yoe": 5
-}"""
+#Глобальные параметри подключения микросервиса
+vacancies_rpc_connection: Optional[AbstractRobustConnection] = None
+vacancies_rpc_channel: Optional[AbstractRobustChannel] = None
+vacancies_rpc_response_waiters: Dict[str, asyncio.Future] = {}
+vacancies_rpc_queue: Optional[AbstractRobustQueue] = None
+_vacancies_rpc_listener_task: Optional[asyncio.Task] = None
+
+
+#Начать слушать 
+async def _start_vacancies_rpc_listener():
+    global _vacancies_rpc_listener_task, vacancies_rpc_queue
+    
+    if _vacancies_rpc_listener_task is None and vacancies_rpc_queue:
+        _vacancies_rpc_listener_task = asyncio.create_task(_vacancies_rpc_listener())
+
+
+#Прослушивание и отправка сообщений в обработку
+async def _vacancies_rpc_listener():
+    global vacancies_rpc_response_waiters
+    
+    if not vacancies_rpc_queue:
+        return
+    
+    async with vacancies_rpc_queue.iterator() as queue_iter:
+        async for message in queue_iter:
+            await _handle_vacancies_rpc_response(message)
+
+
+#Обработать возвращенный результат
+async def _handle_vacancies_rpc_response(message: IncomingMessage):
+    correlation_id = message.correlation_id
+    if correlation_id and correlation_id in vacancies_rpc_response_waiters:
+        try:
+            body = json.loads(message.body.decode())
+            vacancies_rpc_response_waiters[correlation_id].set_result(body)
+        except Exception as e:
+            vacancies_rpc_response_waiters[correlation_id].set_exception(e)
+        finally:
+            if correlation_id in vacancies_rpc_response_waiters:
+                del vacancies_rpc_response_waiters[correlation_id]
+    await message.ack()
+
+
+#Подключение к RabbitMQ
+async def _get_vacancies_rpc_connection():
+    global vacancies_rpc_connection, vacancies_rpc_channel, vacancies_rpc_queue
+    
+    if vacancies_rpc_connection is None or vacancies_rpc_connection.is_closed:
+        try:
+            if vacancies_rpc_connection and not vacancies_rpc_connection.is_closed:
+                await vacancies_rpc_connection.close()
+            
+            vacancies_rpc_connection = await connect_robust(
+                "amqp://vacancies:vacancies@rabbitmq/",
+                login='vacancies',
+                password='vacancies'
+            )
+            vacancies_rpc_channel = await vacancies_rpc_connection.channel()
+            
+            vacancies_rpc_queue = await vacancies_rpc_channel.declare_queue(exclusive=True)
+            
+            await _start_vacancies_rpc_listener()
+            
+            print(" [COVER] Connected to vacancies RPC queue")
+        except Exception as e:
+            print(f" [COVER] Error connecting to vacancies RPC: {e}")
+            raise
+    
+    return vacancies_rpc_connection, vacancies_rpc_channel
+
+
+#Получение данных вакансии по id
+async def get_vacancy_data(vacancy_id: int) -> str:
+    """Get vacancy data from vacancies service via RPC"""
+    global vacancies_rpc_response_waiters
+    
+    if not isinstance(vacancy_id, int) or vacancy_id <= 0:
+        return json.dumps({
+            "error": "Invalid vacancy_id",
+            "name": "Unknown",
+            "description": "",
+            "yoe": 0
+        })
+    
+    try:
+        connection, channel = await _get_vacancies_rpc_connection()
+
+        #Будущее и id
+        correlation_id = str(uuid.uuid4())
+        response_future: asyncio.Future = asyncio.Future()
+        vacancies_rpc_response_waiters[correlation_id] = response_future
+        
+        #Отправка сообщения
+        payload = {
+            "type": "get_id",
+            "id": vacancy_id
+        }
+        
+        message = Message(
+            body=json.dumps(payload).encode(),
+            content_type="application/json",
+            correlation_id=correlation_id,
+            reply_to=vacancies_rpc_queue.name if vacancies_rpc_queue else "",
+            delivery_mode=2
+        )
+        
+        await channel.default_exchange.publish(
+            message,
+            routing_key='vacancies_queue'
+        )
+        
+        print(f" [COVER] Sent RPC request to vacancies: {payload}")
+        
+        #Ожидание ответа
+        try:
+            result = await asyncio.wait_for(response_future, timeout=5.0)
+            
+            #Извлечение данных вакансии
+            if result.get("status") == "success" and result.get("vacancies"):
+                vacancy = result["vacancies"]
+                if isinstance(vacancy, tuple):
+                    vacancy = {
+                        "id": vacancy[0],
+                        "name": vacancy[1],
+                        "description": vacancy[2],
+                        "yoe": vacancy[3]
+                    }
+                return json.dumps(vacancy)
+            else:
+                return json.dumps({
+                    "error": result.get("message", "Vacancy not found"),
+                    "name": "Unknown",
+                    "description": "",
+                    "yoe": 0
+                })
+                
+        except asyncio.TimeoutError:
+            if correlation_id in vacancies_rpc_response_waiters:
+                del vacancies_rpc_response_waiters[correlation_id]
+            return json.dumps({
+                "error": "RPC timeout",
+                "name": "Unknown",
+                "description": "",
+                "yoe": 0
+            })
+            
+    except Exception as e:
+        print(f" [COVER] Error getting vacancy data: {e}")
+        return json.dumps({
+            "error": str(e),
+            "name": "Unknown",
+            "description": "",
+            "yoe": 0
+        })
 
 
 #Обработка входящего запроса на генерацию
@@ -220,8 +367,15 @@ async def on_message(message: aio_pika.IncomingMessage, channel: AbstractRobustC
         await message.nack(requeue=False)
 
 
+#Глобальные параметры подключения
+connection: AbstractRobustConnection = None
+channel: AbstractRobustChannel = None
+queue: AbstractRobustQueue = None
+
 async def main():
-    connection: AbstractRobustConnection = None
+    global connection, channel, queue, vacancies_rpc_connection
+    
+    connection = None
     
     try:
         #Соединение с RabbitMQ
@@ -231,10 +385,10 @@ async def main():
             password='vacancies'
         )
         
-        channel: AbstractRobustChannel = await connection.channel()
+        channel = await connection.channel()
         
         #Объявление очереди
-        queue: AbstractRobustQueue = await channel.declare_queue(
+        queue = await channel.declare_queue(
             'cover_generator_queue',
             durable=True,
             arguments={'x-queue-type': 'quorum'}
@@ -272,6 +426,10 @@ async def main():
     except KeyboardInterrupt:
         print('Interrupted')
         try:
+            #Закрыть соединение при прерывании
+            if vacancies_rpc_connection and not vacancies_rpc_connection.is_closed:
+                await vacancies_rpc_connection.close()
+                print(" [COVER] RPC connection to vacancies closed")
             sys.exit(0)
         except SystemExit:
             os._exit(0)
@@ -279,6 +437,10 @@ async def main():
         print(f"Error: {e}")
         if connection:
             await connection.close()
+        #Закрыть соединение при ошибке
+        if vacancies_rpc_connection and not vacancies_rpc_connection.is_closed:
+            await vacancies_rpc_connection.close()
+            print(" [COVER] RPC connection to vacancies closed")
         sys.exit(1)
 
 
