@@ -130,26 +130,32 @@ async def generate_cover_letter(
 #Функция для получения данных о пользователе по id
 #Т.к. микросервис такой не реализован, то это просто заглушка
 async def get_user_data(user_id: int):
-    return """{
-  "name": "Жмышенко Валерий Альбертович",
-  "age": 54,
-  "position": "Senior Backend Developer",
-  "experience": "18 лет",
-  "location": "Санкт-Петербург",
-  "skills": [
-    "Python",
-    "Django",
-    "PostgreSQL",
-    "Docker",
-    "REST API",
-    "Redis"
-  ],
-  "education": "Высшее техническое образование",
-  "employment": "Полная занятость",
-  "salary_expectation": "220 000 ₽",
-  "about": "Опытный разработчик. Специализируется на создании серверных приложений и проектировании баз данных. Умеет работать самостоятельно и в команде.",
-  "email": "valery.zhm@example.com"
-}"""
+    if (user_id == 1):
+        return """{
+            "name": "Жмышенко Валерий Альбертович",
+            "age": 54,
+            "position": "Senior Backend Developer",
+            "experience": "18 лет",
+            "location": "Санкт-Петербург",
+            "skills": [
+                "Python",
+                "Django",
+                "PostgreSQL",
+                "Docker",
+                "REST API",
+                "Redis"
+            ],
+            "education": "Высшее техническое образование",
+            "employment": "Полная занятость",
+            "salary_expectation": "220 000 ₽",
+            "about": "Опытный разработчик. Специализируется на создании серверных приложений и проектировании баз данных. Умеет работать самостоятельно и в команде.",
+            "email": "valery.zhm@example.com"
+            }"""
+    else:
+        return json.dumps({
+                            "status": "error",
+                            "message": "User not found"
+                        })
 
 
 #Глобальные параметри подключения микросервиса
@@ -225,15 +231,12 @@ async def _get_vacancies_rpc_connection():
 
 #Получение данных вакансии по id
 async def get_vacancy_data(vacancy_id: int) -> str:
-    """Get vacancy data from vacancies service via RPC"""
     global vacancies_rpc_response_waiters
     
     if not isinstance(vacancy_id, int) or vacancy_id <= 0:
         return json.dumps({
-            "error": "Invalid vacancy_id",
-            "name": "Unknown",
-            "description": "",
-            "yoe": 0
+            "status": "error",
+            "message": "Bad id"
         })
     
     try:
@@ -270,6 +273,14 @@ async def get_vacancy_data(vacancy_id: int) -> str:
             result = await asyncio.wait_for(response_future, timeout=5.0)
             
             #Извлечение данных вакансии
+            # Defensive type check - result should be a dict
+            if not isinstance(result, dict):
+                print(f" [COVER] Got unexpected response from vacancies: {result} (type: {type(result).__name__})")
+                return json.dumps({
+                    "status": "error",
+                    "message": f"Invalid response format from vacancies service: expected dict, got {type(result).__name__}"
+                })
+            
             if result.get("status") == "success" and result.get("vacancies"):
                 vacancy = result["vacancies"]
                 if isinstance(vacancy, tuple):
@@ -279,38 +290,41 @@ async def get_vacancy_data(vacancy_id: int) -> str:
                         "description": vacancy[2],
                         "yoe": vacancy[3]
                     }
+                elif isinstance(vacancy, list):
+                    # Handle list response (JSON deserialization of tuple)
+                    vacancy = {
+                        "id": vacancy[0],
+                        "name": vacancy[1],
+                        "description": vacancy[2],
+                        "yoe": vacancy[3] if len(vacancy) > 3 else None
+                    }
+                print(f" [COVER] Got reply from vacancies: {vacancy}")
                 return json.dumps(vacancy)
             else:
+                print(f" [COVER] Got reply from vacancies: NOT FOUND")
                 return json.dumps({
-                    "error": result.get("message", "Vacancy not found"),
-                    "name": "Unknown",
-                    "description": "",
-                    "yoe": 0
+                    "status": "error",
+                    "message": result.get("message", "Vacancy not found"),
                 })
                 
         except asyncio.TimeoutError:
             if correlation_id in vacancies_rpc_response_waiters:
                 del vacancies_rpc_response_waiters[correlation_id]
             return json.dumps({
-                "error": "RPC timeout",
-                "name": "Unknown",
-                "description": "",
-                "yoe": 0
+                "status": "error",
+                "message": "Timeout error"
             })
             
     except Exception as e:
         print(f" [COVER] Error getting vacancy data: {e}")
         return json.dumps({
-            "error": str(e),
-            "name": "Unknown",
-            "description": "",
-            "yoe": 0
+            "status": "error",
+            "message": str(e)
         })
 
 
 #Обработка входящего запроса на генерацию
 async def process_cover_request(message: aio_pika.IncomingMessage, channel: AbstractRobustChannel, llm: Llama) -> dict:
-    
     try:
         body = json.loads(message.body.decode())
         user_id = body.get("user_id")
@@ -322,8 +336,23 @@ async def process_cover_request(message: aio_pika.IncomingMessage, channel: Abst
                 "message": "Missing user_id or vacancy_id"
             }
 
-        user_data = await get_user_data(user_id)
-        vacancy_data = await get_vacancy_data(vacancy_id)
+        user_data_raw = await get_user_data(user_id)
+        try:
+            user_data_parsed = json.loads(user_data_raw)
+            if isinstance(user_data_parsed, dict) and user_data_parsed.get("status") == "error":
+                return user_data_parsed
+            user_data = user_data_raw
+        except json.JSONDecodeError:
+            user_data = user_data_raw
+
+        vacancy_data_raw = await get_vacancy_data(vacancy_id)
+        try:
+            vacancy_data_parsed = json.loads(vacancy_data_raw)
+            if isinstance(vacancy_data_parsed, dict) and vacancy_data_parsed.get("status") == "error":
+                return vacancy_data_parsed
+            vacancy_data = vacancy_data_raw
+        except json.JSONDecodeError:
+            vacancy_data = vacancy_data_raw
         
         cover_letter = await generate_cover_letter(user_data, vacancy_data, llm)
         

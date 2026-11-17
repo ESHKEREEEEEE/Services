@@ -59,7 +59,7 @@ def get_vacancy_by_id(db_file: str, vacancy_id: int):
         
     cursor.execute('''
         SELECT id, name, description, yoe FROM vacancies
-        WHERE id <= ?
+        WHERE id = ?
         ORDER BY id ASC
         LIMIT 1
     ''', (vacancy_id,))
@@ -67,7 +67,7 @@ def get_vacancy_by_id(db_file: str, vacancy_id: int):
     result = cursor.fetchone()
         
     conn.close()
-    print(f"Found {len(result)} results for yoe <= {vacancy_id} in {db_file}")
+    print(f"Found result for {vacancy_id} in {db_file}")
     if result: return result
 
 #Обновить данные вакансии

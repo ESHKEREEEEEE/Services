@@ -32,7 +32,7 @@ async def process_vacancy_request(message: aio_pika.IncomingMessage, channel: Ab
             #Проверка результата
             if result_id > 0:
                 response = {
-                    "status": "created",
+                    "status": "success",
                     "vacancy": {
                         "id": result_id,
                         "name": body.get("name", "Unknown"),
@@ -74,10 +74,16 @@ async def process_vacancy_request(message: aio_pika.IncomingMessage, channel: Ab
             result = get_vacancy_by_id(DB_FILE, id_value)
         
             #Даже если ничего не нашлось - считаем это успешным результатом,
-            response = {
-                "status": "success",
-                "vacancies": result
-            }
+            if(result):
+                response = {
+                    "status": "success",
+                    "vacancies": result
+                }
+            else:
+                response = {
+                    "status": "error",
+                    "message": "Vacancy not found"
+                }
 
         #Обработка PUT запроса
         elif msg_type == "put":
