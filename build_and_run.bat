@@ -1,16 +1,8 @@
 docker network create job_network
 
-cd cover_generator
-docker build -t cover_generator .
-cd ..
-
-cd gateway
-docker build -t gateway .
-cd ..
-
-cd vacancies
-docker build -t vacancies .
-cd ..
+docker build -t cover_generator ./cover_generator
+docker build -t gateway ./gateway
+docker build -t vacancies ./vacancies
 
 docker run -d --name rabbitmq --network job_network -p 5672:5672 -p 15672:15672 -e RABBITMQ_DEFAULT_USER=admin -e RABBITMQ_DEFAULT_PASS=strongpassword rabbitmq:4-management
 TIMEOUT /T 10 /NOBREAK

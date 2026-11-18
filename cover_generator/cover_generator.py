@@ -273,7 +273,6 @@ async def get_vacancy_data(vacancy_id: int) -> str:
             result = await asyncio.wait_for(response_future, timeout=5.0)
             
             #Извлечение данных вакансии
-            # Defensive type check - result should be a dict
             if not isinstance(result, dict):
                 print(f" [COVER] Got unexpected response from vacancies: {result} (type: {type(result).__name__})")
                 return json.dumps({
@@ -291,7 +290,6 @@ async def get_vacancy_data(vacancy_id: int) -> str:
                         "yoe": vacancy[3]
                     }
                 elif isinstance(vacancy, list):
-                    # Handle list response (JSON deserialization of tuple)
                     vacancy = {
                         "id": vacancy[0],
                         "name": vacancy[1],
